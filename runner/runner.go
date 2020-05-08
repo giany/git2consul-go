@@ -31,25 +31,18 @@ import (
 type Runner struct {
 	logger *log.Entry
 	ErrCh  chan error
-
 	// Channel that receives done signal
 	RcvDoneCh chan struct{}
-
 	// Channel that sends done signal
 	SndDoneCh chan struct{}
-
 	once bool
-
 	kvHandler kv.Handler
-
 	watcher *watch.Watcher
 }
-
 // NewRunner creates a new runner instance
 func NewRunner(config *config.Config, once bool) (*Runner, error) {
 	// var repos repository.Repo
 	logger := log.WithField("caller", "runner")
-
 	// Create repos from configuration
 	repos, err := repository.LoadRepos(config)
 	if err != nil {
@@ -61,13 +54,11 @@ func NewRunner(config *config.Config, once bool) (*Runner, error) {
 	}
 	// Create watcher to watch for repo changes
 	watcher := watch.New(reposI, config.HookSvr, once)
-
 	// Create the handler
 	handler, err := kv.New(config.Consul)
 	if err != nil {
 		return nil, err
 	}
-
 	runner := &Runner{
 		logger:    logger,
 		ErrCh:     make(chan error),
@@ -77,40 +68,32 @@ func NewRunner(config *config.Config, once bool) (*Runner, error) {
 		kvHandler: handler,
 		watcher:   watcher,
 	}
-
 	return runner, nil
 }
-
 // Start the runner
 func (r *Runner) Start() {
 	defer close(r.SndDoneCh)
-
 	go r.watcher.Watch()
-
 	for {
-		select {
-		case repo := <-r.watcher.RepoChangeCh:
-			// Handle change, and return if error on handler
-			retry := 0
-			var err error
-			for ok := true; ok && retry < 3; retry++ {
-				err = r.kvHandler.HandleUpdate(repo)
-				_, ok = err.(*kv.TransactionIntegrityError)
-				time.Sleep(1000 * time.Millisecond)
-			}
-			if err != nil {
-				r.ErrCh <- err
-			}
-		case <-r.watcher.SndDoneCh: // This triggers when watcher gets an error that causes termination
-			r.logger.Info("Watcher received finish")
-			return
-		case <-r.RcvDoneCh:
-			r.logger.Info("Received finish")
+		repo := <-r.watcher.RepoChangeCh
+		// Handle change, and return if error on handler
+		retry := 0
+		var err error
+		for ok := true; ok && retry < 3; retry++ {
+			err = r.kvHandler.HandleUpdate(repo)
+			_, ok = err.(*kv.TransactionIntegrityError)
+			time.Sleep(1000 * time.Millisecond)
+		}
+		if err != nil {
+			r.ErrCh <- err
+		}
+		lastRepo := r.watcher.Repositories[len(r.watcher.Repositories)-1]
+		if repo.Name() == lastRepo.Name() {
+			r.logger.Info("Replaced last REPO, returning ...")
 			return
 		}
 	}
 }
-
 // Stop the runner, cleaning up any routines that it's running. In this case, it will stop
 // the watcher before closing DoneCh
 func (r *Runner) Stop() {
